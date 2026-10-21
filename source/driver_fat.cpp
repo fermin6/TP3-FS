@@ -1,6 +1,6 @@
 ﻿#include "all_heads.h"
 
-
+ 
 /********************************
  *				*
  *	 Clase TDriverFAT	*
@@ -56,7 +56,59 @@ TDriverFAT::~TDriverFAT()
 int TDriverFAT::LevantarDatosSuperbloque()
 {
 /* Salir */
-return(CODERROR_NO_IMPLEMENTADO);
+    const unsigned char *p = PunteroASector(0);
+        if (p == NULL)
+            return CODERROR_SUPERBLOQUE_INVALIDO;
+        
+    /*leer superbloque*/
+    unsigned short bytesPorSector = *(const unsigned short *)(p + 11);
+    unsigned short sectoresPorCluster = p[13];
+    unsigned short sectoresReservados = *(const unsigned short *)(p + 14);
+    unsigned short nroDeFats = p[16];
+    unsigned short nroRootDirEntries = *(const unsigned short *)(p + 17);
+    unsigned int totalSectores = *(const unsigned short *)(p + 19);
+    if (totalSectores == 0) { /*si este valor es cero significa que tiene mas de 65535 sectores y el valor real esta en 0x20*/
+        totalSectores = *(const unsigned int *)(p + 32);
+    }
+    unsigned short nroSectoresPorFat = *(const unsigned short *)(p + 22);
+    unsigned int nroSectoresOcultos = *(const unsigned int *)(p + 28);
+    unsigned int sectoresPorFat = *(const unsigned int *)(p + 36);
+    unsigned int primerClusterRootDir = *(const unsigned int *)(p + 44);
+    
+    /*chequear si es fat y si es fat32*/
+    if (p[510] != 0x55 || p[511] != 0xAA) return CODERROR_SUPERBLOQUE_INVALIDO; /*la firma al final del superbloque*/
+    if (bytesPorSector != 512 && bytesPorSector != 1024 && bytesPorSector != 2048 && bytesPorSector != 4096) return CODERROR_SUPERBLOQUE_INVALIDO; /*únicos tamaños aceptados*/
+    if (sectoresPorCluster == 0 || (sectoresPorCluster & (sectoresPorCluster - 1)) != 0) return CODERROR_SUPERBLOQUE_INVALIDO; /*sectores por cluster potencia de 2 y mayores que cero*/
+    /*un numero que es potencia de 2 solo tiene un bit en 1, entonces [ spc & (spc-1) = 0 ]*/
+    if (sectoresReservados == 0) return CODERROR_SUPERBLOQUE_INVALIDO; /*fat siempre tiene al menos 1 reservado (el boot sector)*/
+    if (nroDeFats == 0) return CODERROR_SUPERBLOQUE_INVALIDO; /*si no tiene fats no es fat*/
+    if (nroSectoresPorFat != 0) {
+        return CODERROR_FILESYSTEM_DESCONOCIDO; /*fat32 tiene este campo en cero y el tamaño lo guarda en el offset 0x024*/
+    }
+    
+    /*datos que se tienen que calcular a partir de los levantados del superbloque*/
+    unsigned int bytesPorCluster = bytesPorSector * sectoresPorCluster;
+    unsigned int nroDeClusters = totalSectores/sectoresPorCluster;
+
+    /*rellenar datos*/
+    /*dtos del superbloque*/
+    DatosFS.TipoFilesystem = tfsFAT32;
+    DatosFS.BytesPorSector = bytesPorSector;
+    DatosFS.NumeroDeClusters = nroDeClusters;
+    DatosFS.BytesPorCluster = bytesPorCluster;
+
+    /*datos específicos*/
+    DatosFS.DatosEspecificos.FAT.SectoresPorCluster = sectoresPorCluster;
+    DatosFS.DatosEspecificos.FAT.SectoresReservados = sectoresReservados;
+    DatosFS.DatosEspecificos.FAT.CopiasFAT = nroDeFats;
+    DatosFS.DatosEspecificos.FAT.EntradasRootDir = nroRootDirEntries;
+    DatosFS.DatosEspecificos.FAT.SectoresPorFAT = sectoresPorFat;
+    DatosFS.DatosEspecificos.FAT.TotalSectores = totalSectores;
+    DatosFS.DatosEspecificos.FAT.SectoresOcultos = nroSectoresOcultos;
+    DatosFS.DatosEspecificos.FAT.ClustersRootDir = 0;
+    DatosFS.DatosEspecificos.FAT.PrimerClusterRootDir = primerClusterRootDir;
+
+    return CODERROR_NINGUNO;
 }
 
 
