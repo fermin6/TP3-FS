@@ -126,7 +126,41 @@ int TDriverFAT::LevantarDatosSuperbloque()
  ****************************************************************************************************************************************/
 int TDriverFAT::ListarDirectorio(const char *Path, std::vector<TEntradaDirectorio> &Entradas)
 {
-/* Salir */
+    const TDatosFSFAT &fat = DatosFS.DatosEspecificos.FAT;
+
+    unsigned int primerSectorDatos = fat.SectoresReservados + fat.CopiasFAT * fat.SectoresPorFAT;
+    unsigned int cluster = fat.PrimerClusterRootDir;
+    unsigned int sector = primerSectorDatos + (cluster - 2) * fat.SectoresPorCluster;
+
+    const unsigned char *datos = PunteroASector(sector);
+
+    const TDirEntryFat *entrada = reinterpret_cast<const TDirEntryFat *>(datos);
+
+    if (datos == nullptr)
+        return CODERROR_SUPERBLOQUE_INVALIDO;
+
+    unsigned int cantidadEntradas = DatosFS.BytesPorSector / 32;
+
+    for (unsigned int i = 0; i < cantidadEntradas; i++)
+    {
+        const TDirEntryFAT *entrada =
+            reinterpret_cast<const TDirEntryFAT *>(
+                datos + i * 32
+            );
+
+        if ((unsigned char)entrada->Name[0] == 0x00)
+            break;
+
+        if ((unsigned char)entrada->Name[0] == 0xE5)
+            continue;
+
+        if (entrada->FileAttributes == FAT_LFN)
+            continue;
+
+        // Acá vamos a procesar cada entrada válida.
+    }
+
+    /* Salir */
 return(CODERROR_NO_IMPLEMENTADO);
 }
 
