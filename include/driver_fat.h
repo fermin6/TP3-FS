@@ -12,7 +12,7 @@
 #define FAT_SYSTEM	0x04
 #define FAT_VOLUME_ID	0x08
 #define FAT_DIRECTORY	0x10
-#define FAT_ARCHIVE	0x20 
+#define FAT_ARCHIVE	0x20
 #define FAT_LFN		(FAT_READ_ONLY|FAT_HIDDEN|FAT_SYSTEM|FAT_VOLUME_ID)
 
 
@@ -56,6 +56,12 @@ public:
 	virtual int			LevantarDatosSuperbloque();
 	virtual int 			ListarDirectorio(const char *Path, std::vector<TEntradaDirectorio> &Entradas);
 	virtual int 			LeerArchivo(const char *Path, unsigned char *&Data, unsigned &DataLen);
+
+private:
+	/* Funciones auxiliares */
+	unsigned			SiguienteCluster(unsigned Cluster);
+	const unsigned char		*PunteroACluster(unsigned Cluster);
+	int				LeerDirectorio(unsigned PrimerCluster, std::vector<TEntradaDirectorio> &Entradas);
 };
 
 #endif

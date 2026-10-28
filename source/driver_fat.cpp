@@ -1,6 +1,6 @@
 ﻿#include "all_heads.h"
 
- 
+
 /********************************
  *				*
  *	 Clase TDriverFAT	*
@@ -59,7 +59,7 @@ int TDriverFAT::LevantarDatosSuperbloque()
     const unsigned char *p = PunteroASector(0);
         if (p == NULL)
             return CODERROR_SUPERBLOQUE_INVALIDO;
-        
+
     /*leer superbloque*/
     unsigned short bytesPorSector = *(const unsigned short *)(p + 11);
     unsigned short sectoresPorCluster = p[13];
@@ -74,7 +74,7 @@ int TDriverFAT::LevantarDatosSuperbloque()
     unsigned int nroSectoresOcultos = *(const unsigned int *)(p + 28);
     unsigned int sectoresPorFat = *(const unsigned int *)(p + 36);
     unsigned int primerClusterRootDir = *(const unsigned int *)(p + 44);
-    
+
     /*chequear si es fat y si es fat32*/
     if (p[510] != 0x55 || p[511] != 0xAA) return CODERROR_SUPERBLOQUE_INVALIDO; /*la firma al final del superbloque*/
     if (bytesPorSector != 512 && bytesPorSector != 1024 && bytesPorSector != 2048 && bytesPorSector != 4096) return CODERROR_SUPERBLOQUE_INVALIDO; /*únicos tamaños aceptados*/
@@ -82,17 +82,30 @@ int TDriverFAT::LevantarDatosSuperbloque()
     /*un numero que es potencia de 2 solo tiene un bit en 1, entonces [ spc & (spc-1) = 0 ]*/
     if (sectoresReservados == 0) return CODERROR_SUPERBLOQUE_INVALIDO; /*fat siempre tiene al menos 1 reservado (el boot sector)*/
     if (nroDeFats == 0) return CODERROR_SUPERBLOQUE_INVALIDO; /*si no tiene fats no es fat*/
+    /*FAT12/16 guardan los sectores por FAT en el offset 22; FAT32 lo deja en 0 y lo guarda en el 36*/
     if (nroSectoresPorFat != 0) {
-        return CODERROR_FILESYSTEM_DESCONOCIDO; /*fat32 tiene este campo en cero y el tamaño lo guarda en el offset 0x024*/
+        sectoresPorFat = nroSectoresPorFat;
+        primerClusterRootDir = 0;
     }
-    
+
+    /*cuántos sectores ocupa la zona fija del root dir (en FAT32 da 0)*/
+    unsigned int sectoresRootDir = (nroRootDirEntries * 32 + bytesPorSector - 1) / bytesPorSector;
+
+    /*el tipo de FAT se decide por la cantidad de clusters de datos*/
+    unsigned int sectoresDatos = totalSectores - (sectoresReservados + nroDeFats * sectoresPorFat + sectoresRootDir);
+    unsigned int clustersDatos = sectoresDatos / sectoresPorCluster;
+    TipoFilsystem tipo;
+    if (clustersDatos < 4085) tipo = tfsFAT12;
+    else if (clustersDatos < 65525) tipo = tfsFAT16;
+    else tipo = tfsFAT32;
+
     /*datos que se tienen que calcular a partir de los levantados del superbloque*/
     unsigned int bytesPorCluster = bytesPorSector * sectoresPorCluster;
     unsigned int nroDeClusters = totalSectores/sectoresPorCluster;
 
     /*rellenar datos*/
     /*dtos del superbloque*/
-    DatosFS.TipoFilesystem = tfsFAT32;
+    DatosFS.TipoFilesystem = tipo;
     DatosFS.BytesPorSector = bytesPorSector;
     DatosFS.NumeroDeClusters = nroDeClusters;
     DatosFS.BytesPorCluster = bytesPorCluster;
@@ -105,10 +118,49 @@ int TDriverFAT::LevantarDatosSuperbloque()
     DatosFS.DatosEspecificos.FAT.SectoresPorFAT = sectoresPorFat;
     DatosFS.DatosEspecificos.FAT.TotalSectores = totalSectores;
     DatosFS.DatosEspecificos.FAT.SectoresOcultos = nroSectoresOcultos;
-    DatosFS.DatosEspecificos.FAT.ClustersRootDir = 0;
+    DatosFS.DatosEspecificos.FAT.ClustersRootDir = (nroRootDirEntries * 32 + bytesPorCluster - 1) / bytesPorCluster;
     DatosFS.DatosEspecificos.FAT.PrimerClusterRootDir = primerClusterRootDir;
 
     return CODERROR_NINGUNO;
+}
+
+/* Convierte fecha y hora de FAT a time_t. Si la fecha es 0, no hay fecha. */
+static time_t FechaFATaTime(__u16 fecha, __u16 hora)
+{
+    if (fecha == 0) return 0;
+    struct tm t = {};
+    t.tm_year = ((fecha >> 9) & 0x7F) + 80;   /* FAT cuenta desde 1980, tm desde 1900 */
+    t.tm_mon  = ((fecha >> 5) & 0x0F) - 1;    /* tm cuenta meses desde 0 */
+    t.tm_mday = fecha & 0x1F;
+    t.tm_hour = (hora >> 11) & 0x1F;
+    t.tm_min  = (hora >> 5) & 0x3F;
+    t.tm_sec  = (hora & 0x1F) * 2;            /* FAT guarda segundos / 2 */
+    t.tm_isdst = -1;
+    return mktime(&t);
+}
+
+/* Convierte una entrada de directorio FAT a la estructura genérica del programa */
+static TEntradaDirectorio ConvertirEntrada(const TDirEntryFAT *e)
+{
+    TEntradaDirectorio r = {};
+
+    /* Nombre: 8 caracteres + 3 de extensión, rellenos con espacios */
+    std::string nombre(e->Name, 8);
+    std::string ext(e->Ext, 3);
+    while (!nombre.empty() && nombre.back() == ' ') nombre.pop_back();
+    while (!ext.empty() && ext.back() == ' ') ext.pop_back();
+    r.Nombre = ext.empty() ? nombre : nombre + "." + ext;
+
+    /* Flags: en FAT los bits coinciden con los fed... del programa */
+    r.Flags = e->FileAttributes & (FAT_READ_ONLY | FAT_HIDDEN | FAT_SYSTEM | FAT_VOLUME_ID | FAT_DIRECTORY | FAT_ARCHIVE);
+
+    r.Bytes = (__u32)e->FileSize;
+    r.DatosEspecificos.FAT.PrimerCluster = ((__u32)e->StartClusterH << 16) | e->StartClusterL;
+
+    r.FechaCreacion = FechaFATaTime(e->CreationDate, e->CreationTime);
+    r.FechaUltimoAcceso = FechaFATaTime(e->LastAccessDate, 0);
+    r.FechaUltimaModificacion = FechaFATaTime(e->ModificationDate, e->ModificationTime);
+    return r;
 }
 
 
@@ -126,42 +178,89 @@ int TDriverFAT::LevantarDatosSuperbloque()
  ****************************************************************************************************************************************/
 int TDriverFAT::ListarDirectorio(const char *Path, std::vector<TEntradaDirectorio> &Entradas)
 {
+    /* Por ahora siempre lista el root. El Path lo usamos en la parte 1c. */
+    return LeerDirectorio(0, Entradas);
+}
+
+
+/* Número de cluster → puntero a sus datos en la imagen */
+const unsigned char *TDriverFAT::PunteroACluster(unsigned Cluster)
+{
+    const TDatosFSFAT &fat = DatosFS.DatosEspecificos.FAT;
+    unsigned sectoresRootDir = (fat.EntradasRootDir * 32 + DatosFS.BytesPorSector - 1) / DatosFS.BytesPorSector;
+    unsigned primerSectorDatos = fat.SectoresReservados + fat.CopiasFAT * fat.SectoresPorFAT + sectoresRootDir;
+    return PunteroASector(primerSectorDatos + (__u64)(Cluster - 2) * fat.SectoresPorCluster);
+}
+
+
+/* Devuelve el cluster que sigue a Cluster según la tabla FAT. Devuelve 0 si es el último. */
+unsigned TDriverFAT::SiguienteCluster(unsigned Cluster)
+{
+    const TDatosFSFAT &fat = DatosFS.DatosEspecificos.FAT;
+    const unsigned char *tabla = PunteroASector(fat.SectoresReservados);
+    if (tabla == NULL) return 0;
+
+    unsigned sig;
+    switch (DatosFS.TipoFilesystem) {
+        case tfsFAT12: {
+            unsigned offset = Cluster + Cluster / 2;        /* 1,5 bytes por entrada */
+            unsigned par = tabla[offset] | (tabla[offset + 1] << 8);
+            sig = (Cluster & 1) ? (par >> 4) : (par & 0x0FFF);
+            if (sig >= 0xFF8) return 0;
+            break;
+        }
+        case tfsFAT16:
+            sig = ((const __u16 *)tabla)[Cluster];
+            if (sig >= 0xFFF8) return 0;
+            break;
+        default:
+            sig = ((const __u32 *)tabla)[Cluster] & 0x0FFFFFFF;   /* FAT32 usa solo 28 bits */
+            if (sig >= 0x0FFFFFF8) return 0;
+            break;
+    }
+    if (sig < 2) return 0;
+    return sig;
+}
+
+
+/* Lee todas las entradas de un directorio. PrimerCluster == 0 significa el root. */
+int TDriverFAT::LeerDirectorio(unsigned PrimerCluster, std::vector<TEntradaDirectorio> &Entradas)
+{
     const TDatosFSFAT &fat = DatosFS.DatosEspecificos.FAT;
 
-    unsigned int primerSectorDatos = fat.SectoresReservados + fat.CopiasFAT * fat.SectoresPorFAT;
-    unsigned int cluster = fat.PrimerClusterRootDir;
-    unsigned int sector = primerSectorDatos + (cluster - 2) * fat.SectoresPorCluster;
+    /* Procesa un bloque de bytes con entradas de 32 bytes. Devuelve false si encontró el fin (0x00). */
+    auto ProcesarBloque = [&](const unsigned char *datos, unsigned bytes) -> bool {
+        for (unsigned i = 0; i < bytes / 32; i++) {
+            const TDirEntryFAT *entrada = reinterpret_cast<const TDirEntryFAT *>(datos + i * 32);
+            if ((unsigned char)entrada->Name[0] == 0x00) return false;
+            if ((unsigned char)entrada->Name[0] == 0xE5) continue;
+            if ((entrada->FileAttributes & FAT_LFN) == FAT_LFN) continue;
+            Entradas.push_back(ConvertirEntrada(entrada));
+        }
+        return true;
+    };
 
-    const unsigned char *datos = PunteroASector(sector);
-
-    const TDirEntryFat *entrada = reinterpret_cast<const TDirEntryFat *>(datos);
-
-    if (datos == nullptr)
-        return CODERROR_SUPERBLOQUE_INVALIDO;
-
-    unsigned int cantidadEntradas = DatosFS.BytesPorSector / 32;
-
-    for (unsigned int i = 0; i < cantidadEntradas; i++)
-    {
-        const TDirEntryFAT *entrada =
-            reinterpret_cast<const TDirEntryFAT *>(
-                datos + i * 32
-            );
-
-        if ((unsigned char)entrada->Name[0] == 0x00)
-            break;
-
-        if ((unsigned char)entrada->Name[0] == 0xE5)
-            continue;
-
-        if (entrada->FileAttributes == FAT_LFN)
-            continue;
-
-        // Acá vamos a procesar cada entrada válida.
+    /* Root de FAT12/16: zona fija, no es un cluster */
+    if (PrimerCluster == 0 && DatosFS.TipoFilesystem != tfsFAT32) {
+        const unsigned char *datos = PunteroASector(fat.SectoresReservados + fat.CopiasFAT * fat.SectoresPorFAT);
+        if (datos == NULL) return CODERROR_FILESYSTEM_CORRUPTO;
+        ProcesarBloque(datos, fat.EntradasRootDir * 32);
+        return CODERROR_NINGUNO;
     }
 
-    /* Salir */
-return(CODERROR_NO_IMPLEMENTADO);
+    /* Root de FAT32: es un cluster más */
+    if (PrimerCluster == 0)
+        PrimerCluster = fat.PrimerClusterRootDir;
+
+    /* Seguir la cadena de clusters */
+    unsigned cluster = PrimerCluster;
+    while (cluster != 0) {
+        const unsigned char *datos = PunteroACluster(cluster);
+        if (datos == NULL) return CODERROR_FILESYSTEM_CORRUPTO;
+        if (!ProcesarBloque(datos, DatosFS.BytesPorCluster)) break;
+        cluster = SiguienteCluster(cluster);
+    }
+    return CODERROR_NINGUNO;
 }
 
 
