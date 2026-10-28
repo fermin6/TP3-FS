@@ -62,6 +62,7 @@ private:
 	unsigned			SiguienteCluster(unsigned Cluster);
 	const unsigned char		*PunteroACluster(unsigned Cluster);
 	int				LeerDirectorio(unsigned PrimerCluster, std::vector<TEntradaDirectorio> &Entradas);
+	int				BuscarEntrada(const char *Path, TEntradaDirectorio &Encontrada);
 };
 
 #endif

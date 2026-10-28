@@ -178,8 +178,58 @@ static TEntradaDirectorio ConvertirEntrada(const TDirEntryFAT *e)
  ****************************************************************************************************************************************/
 int TDriverFAT::ListarDirectorio(const char *Path, std::vector<TEntradaDirectorio> &Entradas)
 {
-    /* Por ahora siempre lista el root. El Path lo usamos en la parte 1c. */
-    return LeerDirectorio(0, Entradas);
+    TEntradaDirectorio dir;
+    int cod = BuscarEntrada(Path, dir);
+    if (cod != CODERROR_NINGUNO)
+        return CODERROR_DIRECTORIO_INEXISTENTE;
+    if (!(dir.Flags & fedDIRECTORIO))
+        return CODERROR_DIRECTORIO_INEXISTENTE;   /* existe, pero es un archivo */
+
+    return LeerDirectorio(dir.DatosEspecificos.FAT.PrimerCluster, Entradas);
+}
+
+/* Recorre el path y devuelve la entrada final. Para "/" devuelve un directorio con cluster 0 (el root). */
+int TDriverFAT::BuscarEntrada(const char *Path, TEntradaDirectorio &Encontrada)
+{
+    if (Path == NULL || Path[0] != '/')
+        return CODERROR_RUTA_NO_ABSOLUTA;
+
+    /* Arrancamos en el root */
+    Encontrada = TEntradaDirectorio();
+    Encontrada.Flags = fedDIRECTORIO;
+    Encontrada.DatosEspecificos.FAT.PrimerCluster = 0;
+
+    std::string path(Path);
+    size_t pos = 1;
+    while (pos <= path.size()) {
+        /* Sacar la próxima parte del path, entre dos '/' */
+        size_t barra = path.find('/', pos);
+        if (barra == std::string::npos) barra = path.size();
+        std::string parte = path.substr(pos, barra - pos);
+        pos = barra + 1;
+        if (parte.empty()) continue;            /* "//" o "/" al final */
+
+        /* Solo se puede entrar a un directorio */
+        if (!(Encontrada.Flags & fedDIRECTORIO))
+            return CODERROR_ARCHIVO_INEXISTENTE;
+
+        /* Leer el directorio actual y buscar la parte */
+        std::vector<TEntradaDirectorio> entradas;
+        int cod = LeerDirectorio(Encontrada.DatosEspecificos.FAT.PrimerCluster, entradas);
+        if (cod != CODERROR_NINGUNO) return cod;
+
+        bool ok = false;
+        for (const auto &e : entradas) {
+            if (e.Flags & fedETIQUETA_VOLUMEN) continue;   /* la etiqueta no es un archivo */
+            if (strcasecmp(e.Nombre.c_str(), parte.c_str()) == 0) {
+                Encontrada = e;
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) return CODERROR_ARCHIVO_INEXISTENTE;
+    }
+    return CODERROR_NINGUNO;
 }
 
 

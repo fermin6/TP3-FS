@@ -1,3 +1,6 @@
+LS	/DIR
+LS	/DIR/DIR2
+LS	/DirGrande
 LS	/
 #LS	/DIR/DIR2
 #LS	/DirGrande
