@@ -331,7 +331,37 @@ int TDriverFAT::LeerDirectorio(unsigned PrimerCluster, std::vector<TEntradaDirec
  ****************************************************************************************************************************************/
 int TDriverFAT::LeerArchivo(const char *Path, unsigned char *&Data, unsigned &DataLen)
 {
-/* Salir */
-return(CODERROR_NO_IMPLEMENTADO);
+    /* 1. Buscar el archivo */
+    TEntradaDirectorio arch;
+    int cod = BuscarEntrada(Path, arch);
+    if (cod != CODERROR_NINGUNO || (arch.Flags & fedDIRECTORIO))
+        return CODERROR_ARCHIVO_INEXISTENTE;
+
+    /* 2. Reservar memoria para todo el archivo */
+    unsigned tam = (unsigned)arch.Bytes;
+    Data = (unsigned char *)malloc(tam > 0 ? tam : 1);
+    if (Data == NULL) return CODERROR_FALTA_MEMORIA;
+
+    /* 3. Copiar cluster por cluster siguiendo la cadena */
+    unsigned copiados = 0;
+    unsigned cluster = arch.DatosEspecificos.FAT.PrimerCluster;
+    while (copiados < tam && cluster != 0) {
+        const unsigned char *datos = PunteroACluster(cluster);
+        if (datos == NULL) { free(Data); Data = NULL; return CODERROR_FILESYSTEM_CORRUPTO; }
+
+        unsigned n = tam - copiados;                      /* lo que falta */
+        if (n > (unsigned)DatosFS.BytesPorCluster)
+            n = DatosFS.BytesPorCluster;                  /* como mucho, un cluster */
+        memcpy(Data + copiados, datos, n);
+        copiados += n;
+
+        cluster = SiguienteCluster(cluster);
+    }
+
+    /* Si la cadena terminó antes de tiempo, el FS está roto */
+    if (copiados < tam) { free(Data); Data = NULL; return CODERROR_FILESYSTEM_CORRUPTO; }
+
+    DataLen = tam;
+    return CODERROR_NINGUNO;
 }
 
